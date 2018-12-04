@@ -35,7 +35,9 @@ import ij.io.FileInfo;
 import ij.io.ImageWriter;
 import ij.io.SaveDialog;
 import ij.measure.Calibration;
+import ij.plugin.Converter;
 import ij.plugin.PlugIn;
+import ij.process.StackConverter;
 
 import java.io.BufferedOutputStream;
 import java.io.BufferedWriter;
@@ -68,6 +70,28 @@ public class Nrrd_Writer implements PlugIn {
 	// See http://teem.sourceforge.net/nrrd/format.html#centers
 	static final String defaultNrrdCentering="node";	
 	
+	
+	public static void main( final String[] args )
+	{
+		File in  = new File( args[ 0 ]);
+		File out = new File( args[ 1 ]);
+
+
+		Nrrd_Reader reader = new Nrrd_Reader();
+		ImagePlus ip = reader.load( in.getParent(), in.getName() );
+
+		System.out.println( out.getParent() );
+		System.out.println( out.getName() );
+		
+		ip.setDisplayRange( 0 , 3600 );
+		// Convert to 16-bit
+		new StackConverter( ip ).convertToGray16();
+
+		Nrrd_Writer writer = new Nrrd_Writer();
+		writer.save( ip,
+				out.getParent(), out.getName(), "gzip" );
+	}
+	
 	public String setNrrdEncoding(String enc) throws IOException {
 		enc=enc.toLowerCase();
 		if (enc.equals("raw")) nrrdEncoding="raw";
@@ -78,7 +102,7 @@ public class Nrrd_Writer implements PlugIn {
 		else throw new IOException("Unknown encoding "+enc);
 		return nrrdEncoding;
 	}
-						
+
 	public void run(String arg) {
 		ImagePlus imp = WindowManager.getCurrentImage();
 		if (imp == null) {
@@ -103,7 +127,12 @@ public class Nrrd_Writer implements PlugIn {
 		save(imp, directory, file);
 	}
 
+
 	public void save(ImagePlus imp, String directory, String file) {
+		save( imp, directory, file, "raw" );
+	}
+	
+	public void save(ImagePlus imp, String directory, String file, String nrrdEncoding) {
 		if (imp == null) {
 			IJ.showMessage(noImages);
 			return;
@@ -130,7 +159,7 @@ public class Nrrd_Writer implements PlugIn {
 		
 		// Actually write out the image
 		try {
-			writeImage(fi,imp.getCalibration()); 
+			writeImage( fi, imp.getCalibration(), nrrdEncoding); 
 		} catch (IOException e) {
 			IJ.error("An error occured writing the file.\n \n" + e);
 			IJ.showStatus("");
@@ -143,6 +172,31 @@ public class Nrrd_Writer implements PlugIn {
 	}
 	
 	void writeImage(FileInfo fi, Calibration cal) throws IOException {
+		FileOutputStream out = new FileOutputStream(new File(fi.directory, fi.fileName));
+		// First write out the full header
+		Writer bw = new BufferedWriter(new OutputStreamWriter(out));
+		// Note, right now this is the only way compression that is implemented
+		if(nrrdEncoding.equals("gzip"))
+			fi.compression=NrrdFileInfo.GZIP;
+		// Blank line terminates header
+		bw.write(makeHeader(fi,cal)+"\n");
+		// Flush rather than close
+		bw.flush();		
+
+		// Then the image data
+		ImageWriter writer = new ImageWriter(fi);
+		if(nrrdEncoding.equals("gzip")) {
+			GZIPOutputStream zStream = new GZIPOutputStream(new BufferedOutputStream( out ));
+			writer.write(zStream);
+			zStream.close();
+		} else {
+			writer.write(out);
+			out.close();
+		}
+		IJ.showStatus("Saved "+ fi.fileName);
+	}
+	
+	void writeImage(FileInfo fi, Calibration cal, String nrrdEncoding ) throws IOException {
 		FileOutputStream out = new FileOutputStream(new File(fi.directory, fi.fileName));
 		// First write out the full header
 		Writer bw = new BufferedWriter(new OutputStreamWriter(out));
@@ -180,6 +234,67 @@ public class Nrrd_Writer implements PlugIn {
 		return out.toString();
 	}
 		
+	public static String makeDisplacementFieldHeader( ImagePlus ip )
+	{
+		System.out.println("Nrrd_Writer makeDisplacementFieldHeader");
+		
+		FileInfo fi = ip.getFileInfo();
+		Calibration cal = ip.getCalibration();
+		
+		int dimension = ip.getNDimensions();
+		
+		if( dimension != 4 )
+			return null;
+		
+		
+		boolean channels = true;
+		if( ip.getNChannels() == 3 && ip.getNFrames() == 1)
+		{
+			channels = true;
+		}
+		else if( ip.getNChannels() == 1 && ip.getNFrames() == 3 )
+		{
+			channels = false;
+		}
+		else
+		{
+			System.err.println("Either NChannels or NFrames must equal 3");
+			return null;
+		}
+		
+		StringWriter out=new StringWriter();
+		out.write("NRRD000"+NRRD_VERSION+"\n");
+		out.write("# Created by Nrrd_Writer at "+(new Date())+"\n");
+
+		// Fetch and write the data type
+		out.write("type: "+imgType(fi.fileType)+"\n");
+		
+		// write dimensionality
+		out.write("dimension: "+dimension+"\n");
+		
+		// Fetch and write the encoding
+		out.write("encoding: "+getEncoding(fi)+"\n");
+
+		out.write("space: right-anterior-superior\n");
+		out.write(dimmedLine("sizes",dimension,"3",fi.width+"",fi.height+"",ip.getNSlices()+""));
+		
+		if(cal!=null){
+		    //out.write("space dimension"+dimension+"\n");
+			out.write(dimmedLine("space directions: ", dimension, "none",
+					"("+cal.pixelWidth+",0,0)","(0,"+cal.pixelHeight+",0)","(0,0,"+cal.pixelDepth+")"));
+		}
+		
+		out.write("kinds: vector domain domain domain\n");
+		out.write("labels: \"Vx;Vy;Vz\" \"x\" \"y\" \"z\"\n");
+		
+		if(fi.intelByteOrder) out.write("endian: little\n");
+		else out.write("endian: big\n");
+		
+		out.write("space origin: (0,0,0)\n");
+
+		return out.toString();
+	}
+	
 	public static String makeHeader(FileInfo fi,Calibration cal) {
 		// NB You can add further fields to this basic header but 
 		// You MUST add your own blank line at the end
@@ -193,6 +308,8 @@ public class Nrrd_Writer implements PlugIn {
 		 */
 		StringWriter out=new StringWriter();
 		
+		System.out.println("Nrrd_Writer makeHeader");
+		
 		out.write("NRRD000"+NRRD_VERSION+"\n");
 		out.write("# Created by Nrrd_Writer at "+(new Date())+"\n");
 
@@ -204,7 +321,8 @@ public class Nrrd_Writer implements PlugIn {
 		if(fi.intelByteOrder) out.write("endian: little\n");
 		else out.write("endian: big\n");
 		
-		int dimension=(fi.nImages==1)?2:3;		
+		int dimension=(fi.nImages==1)?2:3;
+		
 		
 		out.write("dimension: "+dimension+"\n");
 		out.write(dimmedLine("sizes",dimension,fi.width+"",fi.height+"",fi.nImages+""));
@@ -285,18 +403,32 @@ public class Nrrd_Writer implements PlugIn {
 		// The default!
 		return "raw";
 	}
-			
+		
 	private static String dimmedQuotedLine(String tag,int dimension,String x1,String x2,String x3) {
 		x1="\""+x1+"\"";
 		x2="\""+x2+"\"";
 		x3="\""+x3+"\"";
 		return dimmedLine(tag, dimension,x1, x2, x3);
 	}
-	
 	private static String dimmedLine(String tag,int dimension,String x1,String x2,String x3) {
 		String rval=null;
 		if(dimension==2) rval=tag+": "+x1+" "+x2+"\n";
 		else if(dimension==3) rval=tag+": "+x1+" "+x2+" "+x3+"\n";
+		return rval;
+	}	
+	private static String dimmedQuotedLine(String tag,int dimension,String x1,String x2,String x3,String x4) {
+		x1="\""+x1+"\"";
+		x2="\""+x2+"\"";
+		x3="\""+x3+"\"";
+		x4="\""+x4+"\"";
+		return dimmedLine(tag, dimension,x1, x2, x3, x4);
+	}
+	
+	private static String dimmedLine(String tag,int dimension,String x1,String x2,String x3,String x4) {
+		String rval=null;
+		if(dimension==2) rval=tag+": "+x1+" "+x2+"\n";
+		else if(dimension==3) rval=tag+": "+x1+" "+x2+" "+x3+"\n";
+		else if(dimension==4) rval=tag+": "+x1+" "+x2+" "+x3+" "+x4+"\n";
 		return rval;
 	}	
 }
@@ -308,13 +440,15 @@ class NrrdFileInfo extends FileInfo {
 	public String[] centers=null;
 	public int spaceDims=0;
 	public double[] spaceOrigin;
+	public boolean[] isVector;
 
 	double[][] spaceDirs=null;
 	double[] spacings=null;
 
 	public void setSpaceDirs(double [][] spaceDirs){
-		if(spaceDirs.length!=dimension)  throw new RuntimeException
-			("NRRD: Mismatch between spaceDirs ("+spaceDirs.length+") and image dimension ("+dimension+")");
+//		if(spaceDirs.length!=dimension)  throw new RuntimeException
+//			("NRRD: Mismatch between spaceDirs ("+spaceDirs.length+") and image dimension ("+dimension+")");
+
 		if(spaceDims==0){
 			spaceDims=spaceDirs[0].length;
 		} else if(spaceDirs[0].length!=spaceDims)  throw new RuntimeException

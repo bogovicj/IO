@@ -54,6 +54,21 @@ public class Nrrd_Reader extends ImagePlus implements PlugIn
 	public String imagePath=null;
 	public String imageName=null;
 	
+	
+	public static void main( String[] args )
+	{
+		System.out.println("nrrd reader");
+
+		String dir = "/groups/saalfeld/public/jrc2018/transformations/JRC2018F_FAFB/forCmtk";
+		String f = "JRC2018F_FAFB_Warp_cmtk.nrrd";
+
+		Nrrd_Reader reader = new Nrrd_Reader();
+		ImagePlus ip = reader.load( dir, f );
+		System.out.println( ip );
+		
+		ip.show();
+	}
+
 	public void run(String arg) {
 		String directory = "", name = arg;
 		if ((arg==null) || (arg==""))
@@ -224,7 +239,7 @@ public class Nrrd_Reader extends ImagePlus implements PlugIn
 
 			if (noteType.equals("dimension")) {
 				fi.dimension=Integer.valueOf(noteValue).intValue();
-				if(fi.dimension>3) throw new IOException("Nrrd_Reader: Dimension>3 not yet implemented!");
+				if(fi.dimension>5) throw new IOException("Nrrd_Reader: Dimension>5 not yet implemented!");
 			}
 			if (noteType.equals("sizes")) {
 				fi.sizes=new int[fi.dimension];
@@ -256,6 +271,7 @@ public class Nrrd_Reader extends ImagePlus implements PlugIn
 					("Nrrd_Reader: Don't yet know how to handle image dimension!=space dimension!");
 				 				
 			}
+
 			if(noteType.equals("space")){
 				fi.setSpace(noteValue);
 				if(fi.spaceDims>3) throw new IOException
@@ -413,15 +429,15 @@ public class Nrrd_Reader extends ImagePlus implements PlugIn
 
 		if (IJ.debugMode) IJ.log("fieldDescriptor = "+fieldDescriptor);
 
-		fieldDescriptor.replace("none", "(none)");
-		String[] fields_values=fieldDescriptor.split("\\)\\s*\\(");
+		fieldDescriptor.replaceAll("none", "(none)");
+		String[] fields_values=fieldDescriptor.split("\\s+");
 		
 		if (vecIndex>=fields_values.length) return null;
 		
 		String svec=fields_values[vecIndex];
 		svec=svec.trim();
 		svec=svec.replaceAll("[()]", "");
-		if(svec.equals("") || svec.equals("none")) return null;
+		if(svec.equals("") || svec.equals("none") || svec.equals("(none)")) return null;
 		String[] svals = svec.split("\\s*,\\s*");
 		double[] rvals = new double[svals.length];  
 		for(int i=0;i<svals.length;i++){
